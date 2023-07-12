@@ -157,7 +157,7 @@ class Scanner:
                 rows.append(row)
             logging.info(str(datetime.utcnow()) + "========== batch insert webserver.scanfiles. for pageNum: " + str(curPageNum))
             curPageNum = curPageNum + 1
-            if not self.save_or_rollback_batch(page):
+            if not self.save_or_rollback_batch(rows):
                 logging.error(str(datetime.utcnow()) + "========== batch insert webserver.scanfiles failed.")
                 continue
             logging.info(str(datetime.utcnow()) + "========== batch insert webserver.scanfiles successfully.")
