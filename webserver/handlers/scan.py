@@ -132,14 +132,15 @@ class Scanner:
                 if fmt not in SCAN_EXT:
                     # logging.debug("bad format: [%s] %s", fmt, fpath)
                     continue
-                allFilesInImportDir.append((fname, fpath, fmt))
+                allFilesInImportDir.append(fpath)
 
         # 查询数据库所有数据
         allScannedFilesDB = self.query_scanned_books_all()
-        pathsDB=(o.path for o in allScannedFilesDB)       
-
+        pathsDB=[o.path for o in allScannedFilesDB]
+        allPathInDir = [str(fpath) for fpath in allFilesInImportDir]    
         #比较得出需要添加的数据
-        tasks = [ele for ele in allFilesInImportDir if ele.fpath not in pathsDB]
+        tasks = list(set(allPathInDir) - set(pathsDB))
+        logging.info(','.join(tasks))     
 
         # 生成任务ID
         scan_id = int(time.time())
@@ -153,7 +154,7 @@ class Scanner:
         for taskPage in tasksPage["pages"]:
             rows = []
             for task in taskPage:
-                row = ScanFile(task.fpath, task.fpath, scan_id)
+                row = ScanFile(task, task, scan_id)
                 rows.append(row)
             logging.info(str(datetime.utcnow()) + "========== batch insert webserver.scanfiles. for pageNum: " + str(curPageNum))
             curPageNum = curPageNum + 1
@@ -161,8 +162,6 @@ class Scanner:
                 logging.error(str(datetime.utcnow()) + "========== batch insert webserver.scanfiles failed.")
                 continue
             logging.info(str(datetime.utcnow()) + "========== batch insert webserver.scanfiles successfully.")
-
-        
 
         logging.info("========== start to query scanfiles by new status ============")
         allNewScannedFiles = self.query_scanned_books_by_status("new")
@@ -260,6 +259,8 @@ class Scanner:
         query.update({ScanFile.import_id: import_id}, synchronize_session=False)
         self.session.commit()
 
+        rows = []
+        items = []
         # 逐个处理
         for row in query.all():
             fpath = row.path
@@ -278,17 +279,22 @@ class Scanner:
             logging.info("import [%s] from %s", mi.title, fpath)
             row.book_id = self.db.import_book(mi, [fpath])
             row.status = ScanFile.IMPORTED
-            self.save_or_rollback(row)
+            rows.append(row)
+
+            
 
             # 添加关联表
             item = Item()
             item.book_id = row.book_id
             item.collector_id = self.user_id
-            try:
-                item.save()
-            except Exception as err:
-                self.session.rollback()
-                logging.error("save link error: %s", err)
+            items.append(item)
+        self.save_or_rollback_batch(rows)
+        try:
+            self.session.bulk_save_objects(items)
+            item.save()
+        except Exception as err:
+            self.session.rollback()
+            logging.error("save link error: %s", err)
         return True
 
     def import_status(self):
@@ -344,7 +350,14 @@ class ScanList(BaseHandler):
             "update_time": ScanFile.update_time,
         }.get(sort, ScanFile.create_time)
         order = order.asc() if desc == "false" else order.desc()
-        query = self.session.query(ScanFile).order_by(order)
+        # query = self.session.query(ScanFile).order_by(order)
+        
+        query = self.session.query(ScanFile).filter(
+            sqlalchemy.and_(
+                            ScanFile.author.is_not(None),ScanFile.author.is_not(''),ScanFile.author.is_not('Unknown'), ScanFile.author.is_not('未知'),
+                            ScanFile.publisher.is_not(None), ScanFile.publisher.is_not(''), ScanFile.publisher.is_not('Unknown'), ScanFile.publisher.is_not('未知')
+                            )
+                        ).order_by(order)
         total = query.count()
         start = page * num
 
