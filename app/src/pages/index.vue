@@ -2,6 +2,16 @@
     <div>
     <v-row>
         <v-col cols=12>
+            <p class="ma-0 title">阅读中</p>
+        </v-col>
+        <v-col cols=6 xs=6 sm=4 md=2 lg=1 v-for="(book,idx) in get_reading_books" :key="'rec'+idx+book.id" class="book-card">
+            <v-card :to="book.href" class="ma-1">
+                <v-img :src="book.img" :aspect-ratio="11/15" > </v-img>
+            </v-card>
+        </v-col>
+    </v-row>
+    <v-row>
+        <v-col cols=12>
             <p class="ma-0 title">随便推荐</p>
         </v-col>
         <v-col cols=6 xs=6 sm=4 md=2 lg=1 v-for="(book,idx) in get_random_books" :key="'rec'+idx+book.id" class="book-card">
@@ -54,6 +64,12 @@ export default {
         BookCards,
     },
     computed: {
+        get_reading_books: function() {
+            return this.reading_books.map( b => {
+                b['href'] = "/book/" + b.id;
+                return b;
+            });
+        },
         get_random_books: function() {
             return this.random_books.map( b => {
                 b['href'] = "/book/" + b.id;
@@ -82,9 +98,10 @@ export default {
         if ( res !== undefined ) {
             res.setHeader('Cache-Control', 'no-cache');
         }
-        return app.$backend("/index?random=12&recent=12");
+        return app.$backend("/index?reading=12&random=12&recent=12");
     },
     data: () => ({
+        reading_books: [],
         random_books: [],
         new_books: [],
         navs: [],

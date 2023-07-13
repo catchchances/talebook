@@ -79,6 +79,7 @@ class Index(BaseHandler):
 
     @js
     def get(self):
+        cnt_reading = min(int(self.get_argument("reading", 8)), 30)
         cnt_random = min(int(self.get_argument("random", 8)), 30)
         cnt_recent = min(int(self.get_argument("recent", 10)), 30)
 
