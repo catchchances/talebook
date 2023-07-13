@@ -3,7 +3,6 @@
 
 import hashlib
 import logging
-from datetime import datetime
 import os
 import threading
 import time
@@ -18,8 +17,7 @@ from webserver.handlers.base import BaseHandler, auth, js, is_admin
 from webserver.models import Item, ScanFile
 
 CONF = loader.get_settings()
-# SCAN_EXT = ["azw", "azw3", "epub", "mobi", "pdf", "txt"]
-SCAN_EXT = ["azw", "azw3", "epub", "mobi", "pdf"]
+SCAN_EXT = ["azw", "azw3", "epub", "mobi", "pdf", "txt"]
 SCAN_DIR_PREFIX = "/data/"  # 限定扫描必须在/data/目录下，以防黑客扫描到其他系统目录
 
 
@@ -59,12 +57,14 @@ class Scanner:
 
     def save_or_rollback_batch(self, rows):
         try:
-            for row in rows:
+            # for row in rows:
                 # bid = "[ book-id=%s ]" % row.book_id
-                row.save()
+                # row.save()
                 # logging.error("update: status=%-5s, path=%s %s", row.status, row.path, bid if row.book_id > 0 else "")
+            self.session.bulk_save_objects(rows)
+            logging.error("========== insert/update saved.")
             self.session.commit()
-            logging.error(str(datetime.utcnow()) + "========== batch update transaction committed..")
+            logging.error("========== insert/update transaction committed.")
             return True
         except Exception as err:
             logging.error(traceback.format_exc())
@@ -94,6 +94,21 @@ class Scanner:
         return 1
     
 
+
+    def run_updateFileSize(self, path_dir):
+        if self.resume_last_scan():
+            return 1
+
+        if not self.allow_backgrounds():
+            self.do_updateFileSize(path_dir)
+        else:
+            logging.error("run into background thread")
+            t = threading.Thread(name="do_updateFileSize", target=self.do_updateFileSize, args=(path_dir,))
+            t.setDaemon(True)
+            t.start()
+        return 1
+    
+
     
     
     def query_scanned_books_by_path(self, fpath):
@@ -111,6 +126,31 @@ class Scanner:
         return query.all()
     
 
+    def query_scanned_books_no_filesize(self):
+        query = self.session.query(ScanFile).filter(ScanFile.file_size in [None, 0])
+        return query.all()
+    
+
+    
+    
+
+    def do_updateFileSize(self, path_dir):
+        allScannedFilesDB = self.query_scanned_books_all()
+        sumsize = 0
+        for row in allScannedFilesDB:
+            if os.path.exists(row.path) and os.path.isfile(row.path):
+                file_size_kb = os.stat(row.path).st_size/(1024)
+                row.file_size=int(file_size_kb)
+                sumsize += int(file_size_kb)
+
+        logging.info('sumsize:' + str(sumsize) + 'kb')
+        # pages = self.paginate(allScannedFilesDB, 100)
+        # for page in pages['pages']:
+        #     self.save_or_rollback_batch(page)
+            # self.session.bulk_save_objects(page)
+            # self.session.commit()
+
+
 
     def do_scan(self, path_dir):
         from calibre.ebooks.metadata.meta import get_metadata
@@ -127,21 +167,18 @@ class Scanner:
                 fpath = os.path.join(dirpath, fname)
                 if not os.path.isfile(fpath):
                     continue
-
+                file_size_mb = os.stat(fpath).st_size/(1024*1024)
                 fmt = fpath.split(".")[-1].lower()
                 if fmt not in SCAN_EXT:
                     # logging.debug("bad format: [%s] %s", fmt, fpath)
                     continue
-                allFilesInImportDir.append(fpath)
+                allFilesInImportDir.append((fpath,file_size_mb))
 
         # 查询数据库所有数据
         allScannedFilesDB = self.query_scanned_books_all()
         pathsDB=[o.path for o in allScannedFilesDB]
-        allPathInDir = [str(fpath) for fpath in allFilesInImportDir]    
         #比较得出需要添加的数据
-        tasks = list(set(allPathInDir) - set(pathsDB))
-        logging.info(','.join(tasks))     
-
+        tasks = [(fpath,fsize) for fpath,fsize in allFilesInImportDir if fpath not in pathsDB]    
         # 生成任务ID
         scan_id = int(time.time())
         logging.info("========== start to insert webserver.scanfiles ============")
@@ -149,41 +186,37 @@ class Scanner:
         # 写入新的文件信息到数据库
         tasksPage = self.paginate(tasks, 100)
         totalPage = tasksPage['pages_no']
-        logging.info(str(datetime.utcnow()) + "========== insert totalPage: " + str(totalPage))
+        logging.info("========== insert totalPage: " + str(totalPage))
         curPageNum = 0
         for taskPage in tasksPage["pages"]:
-            rows = []
-            for task in taskPage:
-                row = ScanFile(task, task, scan_id)
-                rows.append(row)
-            logging.info(str(datetime.utcnow()) + "========== batch insert webserver.scanfiles. for pageNum: " + str(curPageNum))
+            rows = [ScanFile(fpath, fpath, scan_id, fsize) for fpath, fsize in taskPage]
+            logging.info("========== batch insert webserver.scanfiles. for pageNum: " + str(curPageNum))
             curPageNum = curPageNum + 1
             if not self.save_or_rollback_batch(rows):
-                logging.error(str(datetime.utcnow()) + "========== batch insert webserver.scanfiles failed.")
+                logging.error("========== batch insert webserver.scanfiles failed.")
                 continue
-            logging.info(str(datetime.utcnow()) + "========== batch insert webserver.scanfiles successfully.")
+            logging.info("========== batch insert webserver.scanfiles successfully.")
 
         logging.info("========== start to query scanfiles by new status ============")
         allNewScannedFiles = self.query_scanned_books_by_status("new")
 
         logging.info("========== start to fetch metadate from file and update tables ============")
-
         rows = allNewScannedFiles;
    
         pageRst = self.paginate(rows, 100);
         totalPage = pageRst['pages_no']
-        logging.info(str(datetime.utcnow()) + "========== update totalPage: " + str(totalPage))
+        logging.info("========== update totalPage: " + str(totalPage))
         curPageNum = 0;
         for page in pageRst['pages']:
             for row in page:
                 fpath = row.path
 
                 # 尝试解析metadata
-                logging.info(str(datetime.utcnow()) + "========== fetch metadate for " + fpath)
+                logging.info("========== fetch metadate for " + fpath)
                 fmt = fpath.split(".")[-1].lower()
                 with open(fpath, "rb") as stream:
                     mi = get_metadata(stream, stream_type=fmt, use_libprs_metadata=True)
-                logging.info(str(datetime.utcnow()) + "========== fetch metadate end.")
+                logging.info("========== fetch metadate end.")
                 row.title = mi.title
                 row.author = mi.author_sort
                 row.publisher = mi.publisher
@@ -191,18 +224,18 @@ class Scanner:
                 row.status = ScanFile.READY  # 设置为可处理
 
                 # TODO calibre提供的书籍重复接口只有对比title；应当提前对整个书库的文件做哈希，才能准确去重
-                logging.info(str(datetime.utcnow()) + "========== compare title to calibre for " + row.title)
+                logging.info("========== compare title to calibre for " + row.title)
                 books = self.db.books_with_same_title(mi)
-                logging.info(str(datetime.utcnow()) + "========== compare title to calibre end.")
+                logging.info("========== compare title to calibre end.")
                 if books:
                     row.book_id = books.pop()
                     row.status = ScanFile.EXIST
-            logging.info(str(datetime.utcnow()) + "========== batch update webserver.scanfiles. for pageNum: " + str(curPageNum))
+            logging.info("========== batch update webserver.scanfiles. for pageNum: " + str(curPageNum))
             curPageNum = curPageNum + 1
             if not self.save_or_rollback_batch(page):
-                logging.error(str(datetime.utcnow()) + "========== batch update webserver.scanfiles failed.")
+                logging.error("========== batch update webserver.scanfiles failed.")
                 continue
-            logging.info(str(datetime.utcnow()) + "========== batch update webserver.scanfiles successfully.")
+            logging.info("========== batch update webserver.scanfiles successfully.")
         return True
     
 
@@ -260,6 +293,7 @@ class Scanner:
         self.session.commit()
 
         rows = []
+        existRows = []
         items = []
         # 逐个处理
         for row in query.all():
@@ -273,25 +307,27 @@ class Scanner:
             if books:
                 row.status = ScanFile.EXIST
                 row.book_id = books.pop()
-                self.save_or_rollback(row)
+                existRows.append(row)
                 continue
 
+            # 组装记录为已导入
             logging.info("import [%s] from %s", mi.title, fpath)
             row.book_id = self.db.import_book(mi, [fpath])
             row.status = ScanFile.IMPORTED
             rows.append(row)
-
-            
 
             # 添加关联表
             item = Item()
             item.book_id = row.book_id
             item.collector_id = self.user_id
             items.append(item)
+        logging.info("batch update table:scanfiles for newImport")
         self.save_or_rollback_batch(rows)
+        logging.info("batch update table:scanfiles for existed")
+        self.save_or_rollback_batch(existRows)
         try:
-            self.session.bulk_save_objects(items)
-            item.save()
+            logging.info("batch update table:item")
+            self.save_or_rollback_batch(items)
         except Exception as err:
             self.session.rollback()
             logging.error("save link error: %s", err)
@@ -353,7 +389,7 @@ class ScanList(BaseHandler):
         # query = self.session.query(ScanFile).order_by(order)
         
         query = self.session.query(ScanFile).filter(
-            sqlalchemy.and_(
+            sqlalchemy.and_(ScanFile.status.is_('ready'),
                             ScanFile.author.is_not(None),ScanFile.author.is_not(''),ScanFile.author.is_not('Unknown'), ScanFile.author.is_not('未知'),
                             ScanFile.publisher.is_not(None), ScanFile.publisher.is_not(''), ScanFile.publisher.is_not('Unknown'), ScanFile.publisher.is_not('未知')
                             )
@@ -399,6 +435,21 @@ class ScanRun(BaseHandler):
         if total == 0:
             return {"err": "empty", "msg": _("目录中没有找到符合要求的书籍文件！")}
         return {"err": "ok", "msg": _(u"开始扫描了"), "total": total}
+
+
+class UpdateFileSize(BaseHandler):
+    @js
+    @is_admin
+    def post(self):
+        path = CONF["scan_upload_path"]
+        if not path.startswith(SCAN_DIR_PREFIX):
+            return {"err": "params.error", "msg": _(u"书籍导入目录必须是%s的子目录") % SCAN_DIR_PREFIX}
+        m = Scanner(self.db, self.settings["ScopedSession"])
+        total = m.run_updateFileSize(path)
+        if total == 0:
+            return {"err": "empty", "msg": _("目录中没有找到符合要求的书籍文件！")}
+        return {"err": "ok", "msg": _(u"开始扫描了"), "total": total}
+
 
 
 class ScanDelete(BaseHandler):
@@ -462,4 +513,5 @@ def routes():
         (r"/api/admin/scan/mark", ScanMark),
         (r"/api/admin/import/run", ImportRun),
         (r"/api/admin/import/status", ImportStatus),
+        (r"/api/admin/import/fsize", UpdateFileSize),
     ]
