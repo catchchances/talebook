@@ -271,25 +271,59 @@ class Scanner:
         total = self.build_query(hashlist).count()
 
         if not self.allow_backgrounds():
-            self.do_import(hashlist)
+            self.do_import(hashlist, None)
         else:
             logging.info("run into background thread")
-            t = threading.Thread(name="do_import", target=self.do_import, args=(hashlist,))
+            t = threading.Thread(name="do_import", target=self.do_import, args=(hashlist, None))
             t.setDaemon(True)
             t.start()
         return total
+    
 
-    def do_import(self, hashlist):
+    def get_query_for_scanned_books_by_ready_and_strict(self):
+        return self.session.query(ScanFile).filter(
+                sqlalchemy.and_(ScanFile.status.is_('ready'),
+                                ScanFile.author.is_not(None),ScanFile.author.is_not(''),ScanFile.author.is_not('Unknown'), ScanFile.author.is_not('未知'),
+                                ScanFile.publisher.is_not(None), ScanFile.publisher.is_not(''), ScanFile.publisher.is_not('Unknown'), ScanFile.publisher.is_not('未知')
+                                )
+                            )
+
+
+    def run_import_auto(self):
+        if self.resume_last_import():
+            return 1
+
+        query = self.get_query_for_scanned_books_by_ready_and_strict().all()
+        pageObj = self.paginate(query, 100)
+        total = pageObj['total']
+        logging.info('batch auto import. total: %s, pageCount: %s' % (total, pageObj['pages_no']))
+        if not self.allow_backgrounds():
+            self.do_import_batch(pageObj['pages'])
+        else:
+            logging.info("run into background thread")
+            t = threading.Thread(name="do_import_batch", target=self.do_import_batch, args=(pageObj['pages'],))
+            t.setDaemon(True)
+            t.start()
+        return total
+    
+
+    
+    def do_import_batch(self, pages):
+        # 生成任务ID
+        import_id = int(time.time())
+        for page in pages:
+            self.do_import([row.hash for row in page], import_id)
+
+
+    def do_import(self, hashlist, import_id):
         from calibre.ebooks.metadata.meta import get_metadata
 
         if threading.get_ident() != self.curret_thread:
             self.bind_new_session()
 
-        # 生成任务ID
-        import_id = int(time.time())
 
         query = self.build_query(hashlist)
-        query.update({ScanFile.import_id: import_id}, synchronize_session=False)
+        query.update({ScanFile.import_id: (import_id or int(time.time()))}, synchronize_session=False)
         self.session.commit()
 
         rows = []
@@ -364,7 +398,19 @@ class Scanner:
         return count
 
 
+
+
 class ScanList(BaseHandler):
+
+    
+    def get_query_for_scanned_books_by_ready_and_strict(self):
+        return self.session.query(ScanFile).filter(
+                sqlalchemy.and_(ScanFile.status.is_('ready'),
+                                ScanFile.author.is_not(None),ScanFile.author.is_not(''),ScanFile.author.is_not('Unknown'), ScanFile.author.is_not('未知'),
+                                ScanFile.publisher.is_not(None), ScanFile.publisher.is_not(''), ScanFile.publisher.is_not('Unknown'), ScanFile.publisher.is_not('未知')
+                                )
+                            )
+
     @js
     @auth
     def get(self):
@@ -388,12 +434,7 @@ class ScanList(BaseHandler):
         order = order.asc() if desc == "false" else order.desc()
         # query = self.session.query(ScanFile).order_by(order)
         
-        query = self.session.query(ScanFile).filter(
-            sqlalchemy.and_(ScanFile.status.is_('ready'),
-                            ScanFile.author.is_not(None),ScanFile.author.is_not(''),ScanFile.author.is_not('Unknown'), ScanFile.author.is_not('未知'),
-                            ScanFile.publisher.is_not(None), ScanFile.publisher.is_not(''), ScanFile.publisher.is_not('Unknown'), ScanFile.publisher.is_not('未知')
-                            )
-                        ).order_by(order)
+        query = self.get_query_for_scanned_books_by_ready_and_strict().order_by(order)
         total = query.count()
         start = page * num
 
@@ -495,6 +536,18 @@ class ImportRun(BaseHandler):
         return {"err": "ok", "msg": _(u"扫描成功")}
 
 
+
+class AutoImportRun(BaseHandler):
+    @js
+    @is_admin
+    def post(self):
+        m = Scanner(self.db, self.settings["ScopedSession"], self.user_id())
+        total = m.run_import_auto()
+        if total == 0:
+            return {"err": "empty", "msg": _("没有等待导入书库的书籍！")}
+        return {"err": "ok", "msg": _(u"扫描成功")}
+
+
 class ImportStatus(BaseHandler):
     @js
     @is_admin
@@ -514,4 +567,5 @@ def routes():
         (r"/api/admin/import/run", ImportRun),
         (r"/api/admin/import/status", ImportStatus),
         (r"/api/admin/import/fsize", UpdateFileSize),
+        (r"/api/admin/import/auto", AutoImportRun),
     ]
