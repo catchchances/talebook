@@ -398,6 +398,56 @@ class Scanner:
         return count
 
 
+    def cal_file_md5(self, file_path):
+        with open(file_path, 'rb') as fp:
+            data = fp.read()
+            file_md5= hashlib.md5(data).hexdigest()
+            return file_md5
+        
+    
+    def cal_file_sha1(self, file_path):
+        with open(file_path, 'rb') as fp:
+            data = fp.read()
+            file_sha1= hashlib.sha1(data).hexdigest()
+            return file_sha1
+        
+
+    def run_fill_size_and_md5(self):
+        allScanFilesInDB = self.query_scanned_books_all()
+        # 分页
+        hash_existed_list = [scan_file_db.hash for scan_file_db in allScanFilesInDB]
+        pageTotal = self.paginate(allScanFilesInDB, 50)
+        logging.info('total items:%s'%pageTotal['total'])
+        logging.info('total page:%s'%pageTotal['pages_no'])
+        for page in pageTotal['pages']:
+            pageInsert = []
+            for scanFileInDB in page:
+                hash_value = scanFileInDB.hash
+                file_path = scanFileInDB.path
+                fsize = os.stat(scanFileInDB.path).st_size
+                hashFormat = "fstat:%s/md5:%s/sha1:%s"
+                # 生成hash值
+                if "fstat:" in hash_value and "/md5:" in hash_value and "/sha1:" in hash_value: 
+                    continue
+                elif hash_value is None or 'sha1:' not in hash_value:
+                    md5 = self.cal_file_md5(file_path)
+                    sha1 = self.cal_file_sha1(file_path)
+                    hash_value = hashFormat % (fsize, md5, sha1)
+                else:
+                    logging.error("unkown hash format. id:%s, hash:%s" % (str(scanFileInDB.id), scanFileInDB.hash))
+
+                #判断hash有没有重复的
+                if hash_value in hash_existed_list:
+                    logging.error("exist file. id:%s, hash:%s, path:%s" % (str(scanFileInDB.id), hash_value, file_path))
+                    continue
+                else:
+                    logging.info("update table scanfiles. id:%s, hash:%s" % (str(scanFileInDB.id), hash_value))
+                    pageInsert.append(scanFileInDB)
+                    hash_existed_list.append(hash_value)
+            self.save_or_rollback_batch(pageInsert)
+
+        return pageTotal['total']
+                
 
 
 class ScanList(BaseHandler):
@@ -557,6 +607,22 @@ class ImportStatus(BaseHandler):
         return {"err": "ok", "msg": _(u"成功"), "status": status}
 
 
+
+
+class FillSizeAndMd5(BaseHandler):
+    @js
+    @is_admin
+    def post(self):
+        m = Scanner(self.db, self.settings["ScopedSession"], self.user_id())
+        total = m.run_fill_size_and_md5()
+        if total == 0:
+            return {"err": "empty", "msg": _("没有等待更新的数据！")}
+        return {"err": "ok", "msg": _(u"更新成功")}
+
+
+
+
+
 def routes():
     return [
         (r"/api/admin/scan/list", ScanList),
@@ -568,4 +634,5 @@ def routes():
         (r"/api/admin/import/status", ImportStatus),
         (r"/api/admin/import/fsize", UpdateFileSize),
         (r"/api/admin/import/auto", AutoImportRun),
+        (r"/api/admin/scan/fillSizeAndMd5", FillSizeAndMd5),
     ]
