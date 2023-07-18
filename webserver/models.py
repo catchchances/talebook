@@ -302,7 +302,7 @@ class ScanFile(Base, SQLAlchemyMixin):
     EXIST = "exist"
     IMPORTED = "imported"
 
-    def __init__(self, path, hash_value, scan_id, fsize):
+    def __init__(self, path, hash_value, scan_id):
         super(ScanFile, self).__init__()
         self.name = os.path.basename(path)
         self.path = path

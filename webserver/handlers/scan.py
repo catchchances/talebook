@@ -161,24 +161,25 @@ class Scanner:
         # 生成任务（粗略扫描），前端可以调用API查询进展
 
         # 遍历配置目录下的所有书籍
-        allFilesInImportDir = []
+        allFilePathesInDir = []
         for dirpath, __, filenames in os.walk(path_dir):
             for fname in filenames:
                 fpath = os.path.join(dirpath, fname)
                 if not os.path.isfile(fpath):
                     continue
-                file_size_mb = os.stat(fpath).st_size/(1024*1024)
                 fmt = fpath.split(".")[-1].lower()
                 if fmt not in SCAN_EXT:
                     # logging.debug("bad format: [%s] %s", fmt, fpath)
                     continue
-                allFilesInImportDir.append((fpath,file_size_mb))
+                allFilePathesInDir.append(fpath)
 
         # 查询数据库所有数据
         allScannedFilesDB = self.query_scanned_books_all()
-        pathsDB=[o.path for o in allScannedFilesDB]
+        pathsExsitedDB = [o.path for o in allScannedFilesDB]
+        hashsExistedDB = [o.hash for o in allScannedFilesDB]
+
         #比较得出需要添加的数据
-        tasks = [(fpath,fsize) for fpath,fsize in allFilesInImportDir if fpath not in pathsDB]    
+        tasks = [fpath for fpath in allFilePathesInDir if fpath not in pathsExsitedDB]    
         # 生成任务ID
         scan_id = int(time.time())
         logging.info("========== start to insert webserver.scanfiles ============")
@@ -189,21 +190,31 @@ class Scanner:
         logging.info("========== insert totalPage: " + str(totalPage))
         curPageNum = 0
         for taskPage in tasksPage["pages"]:
-            rows = [ScanFile(fpath, fpath, scan_id, fsize) for fpath, fsize in taskPage]
+            rows_new = []
+            for fpath in taskPage:
+                fsize = os.stat(fpath).st_size
+                md5 = self.cal_file_md5(fpath)
+                sha1 = self.cal_file_sha1(fpath)
+                hash_value = "fstat:%s/md5:%s/sha1:%s" % (fsize, md5, sha1)
+                if hash_value in hashsExistedDB:
+                    continue
+                else:
+                    rows_new.append(ScanFile(fpath, hash_value, scan_id))
+
             logging.info("========== batch insert webserver.scanfiles. for pageNum: " + str(curPageNum))
             curPageNum = curPageNum + 1
-            if not self.save_or_rollback_batch(rows):
+            if not self.save_or_rollback_batch(rows_new):
                 logging.error("========== batch insert webserver.scanfiles failed.")
                 continue
             logging.info("========== batch insert webserver.scanfiles successfully.")
 
         logging.info("========== start to query scanfiles by new status ============")
-        allNewScannedFiles = self.query_scanned_books_by_status("new")
+        all_scanned_files_in_db_new = self.query_scanned_books_by_status("new")
 
         logging.info("========== start to fetch metadate from file and update tables ============")
-        rows = allNewScannedFiles;
+        rows_update = all_scanned_files_in_db_new;
    
-        pageRst = self.paginate(rows, 100);
+        pageRst = self.paginate(rows_update, 100);
         totalPage = pageRst['pages_no']
         logging.info("========== update totalPage: " + str(totalPage))
         curPageNum = 0;
