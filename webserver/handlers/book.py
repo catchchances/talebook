@@ -109,7 +109,6 @@ class Index(BaseHandler):
                     for b in reading_books:
                         if id == b['id']:
                             reading_books_sorted.append(b)
-                random_books = reading_books_sorted
             except:
                 logging.error("no read_history for user:%s." % self.current_user.name)
         
