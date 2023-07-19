@@ -293,7 +293,6 @@ class ScanFile(Base, SQLAlchemyMixin):
     update_time = Column(DateTime)
     book_id = Column(Integer, default=0)
     data = Column(MutableDict.as_mutable(JSONType), default={})
-    file_size=Column(Integer, default=0)
 
     # STATUS
     NEW = "new"
@@ -308,7 +307,6 @@ class ScanFile(Base, SQLAlchemyMixin):
         self.path = path
         self.hash = hash_value
         self.scan_id = scan_id
-        self.file_size = fsize
         self.status = self.NEW
         self.create_time = datetime.datetime.now()
         self.update_time = datetime.datetime.now()
