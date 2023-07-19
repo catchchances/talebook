@@ -92,16 +92,28 @@ class Index(BaseHandler):
         random_books = [b for b in self.get_books(ids=random_ids) if b["cover"]]
         random_books.sort(key=lambda x: x["id"], reverse=True)
 
-        ids.sort(reverse=True)
-        new_ids = random.sample(ids[0:100], min(cnt_recent, len(ids)))
-        new_books = [b for b in self.get_books(ids=new_ids) if b["cover"]]
-        new_books.sort(key=lambda x: x["id"], reverse=True)
-
+        # ids.sort(reverse=True)
+        # new_ids = random.sample(ids[0:100], min(cnt_recent, len(ids)))
+        # new_books = [b for b in self.get_books(ids=new_ids) if b["cover"]]
+        # new_books.sort(key=lambda x: x["id"], reverse=True)
+        
+        reading_ids=[]
+        for k, v in self.current_user.extra.items():
+            if k.endswith("read_history"):
+                reading_ids = [b["id"] for b in v][:10]
+        reading_books = [b for b in self.get_books(ids=reading_ids) if b["cover"]]
+        reading_books_sorted = []
+        for id in reading_ids:
+            for b in reading_books:
+                if id == b['id']:
+                    reading_books_sorted.append(b)
         return {
-            "random_books_count": len(random_books),
-            "new_books_count": len(new_books),
-            "random_books": [self.fmt(b) for b in random_books],
-            "new_books": [self.fmt(b) for b in new_books],
+            "random_books_count": len(reading_books_sorted),
+            "new_books_count": len(random_books),
+            "reading_books_count": len(reading_books_sorted),
+            "random_books": [self.fmt(b) for b in reading_books_sorted],
+            "new_books": [self.fmt(b) for b in random_books],
+            'reading_books': [self.fmt(b) for b in reading_books_sorted],
         }
 
 
